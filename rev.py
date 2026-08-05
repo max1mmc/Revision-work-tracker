@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Revision / work tracker.
 
-Log a session in one line, then the dashboard rebuilds itself.
-
-    rev 90 Chemistry                 # 90 minutes of Chemistry, today
+    rev                              # the dashboard, and a prompt to log
+    rev 90 Chemistry                 # or log straight from the command line
     rev 1h30 Maths "C4 past paper"   # with a note
     rev -d 2026-08-01 45 Physics     # backdated
     rev list                         # recent entries
@@ -16,6 +15,7 @@ import csv
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from collections import defaultdict
@@ -129,6 +129,34 @@ def build_payload(rows):
         notes[r["date"]].append({"label": label, "minutes": int(r["minutes"])})
     current, longest = streaks(totals.keys())
     week_ago = (date.today() - timedelta(days=6)).isoformat()
+
+    # week-by-week subject mix, so a neglected subject is visible
+    weeks = defaultdict(lambda: defaultdict(int))
+    for r in rows:
+        d = datetime.strptime(r["date"], "%Y-%m-%d").date()
+        monday = (d - timedelta(days=d.weekday())).isoformat()
+        weeks[monday][r["subject"]] += int(r["minutes"])
+    week_list = [{"start": k, "bySubject": dict(v), "total": sum(v.values())}
+                 for k, v in sorted(weeks.items())][-26:]
+
+    # average minutes per weekday, counting only weeks you were active
+    per_weekday = defaultdict(list)
+    if totals:
+        d = datetime.strptime(min(totals), "%Y-%m-%d").date()
+        while d <= date.today():
+            per_weekday[d.weekday()].append(totals.get(d.isoformat(), 0))
+            d += timedelta(days=1)
+    weekday = [round(sum(v) / len(v)) if v else 0
+               for _, v in sorted(per_weekday.items())] or [0] * 7
+
+    this_monday = date.today() - timedelta(days=date.today().weekday())
+    this_week = sum(m for d, m in totals.items() if d >= this_monday.isoformat())
+    prev = this_monday - timedelta(days=7)
+    last_week = sum(m for d, m in totals.items()
+                    if prev.isoformat() <= d < this_monday.isoformat())
+    best_day = max(totals.items(), key=lambda kv: kv[1]) if totals else ("", 0)
+    best_week = max(week_list, key=lambda w: w["total"]) if week_list else None
+
     return {
         "days": [
             {"date": d, "minutes": m, "sessions": notes[d]}
@@ -139,6 +167,8 @@ def build_payload(rows):
             key=lambda s: -s["minutes"],
         ),
         "cap": scale_cap(totals),
+        "weeks": week_list,
+        "weekday": weekday,
         "stats": {
             "totalMinutes": sum(totals.values()),
             "sessions": len(rows),
@@ -146,6 +176,10 @@ def build_payload(rows):
             "longestStreak": longest,
             "last7": sum(m for d, m in totals.items() if d >= week_ago),
             "activeDays": len(totals),
+            "thisWeek": this_week,
+            "lastWeek": last_week,
+            "bestDay": {"date": best_day[0], "minutes": best_day[1]},
+            "bestWeek": best_week["total"] if best_week else 0,
         },
         "generated": datetime.now().strftime("%d %b %Y, %H:%M"),
     }
@@ -171,25 +205,36 @@ def fmt(minutes):
     return f"{h}h {m}m" if m else f"{h}h"
 
 
-def cmd_add(args):
+def match_subject(name, rows):
+    """Keep spellings consistent: 'chem' becomes the existing 'Chemistry'."""
+    known = {r["subject"] for r in rows}
+    for k in known:
+        if k.lower() == name.lower():
+            return k
+    hits = [k for k in known if k.lower().startswith(name.lower())]
+    return hits[0] if len(hits) == 1 else name[:1].upper() + name[1:]
+
+
+def add_entry(args):
+    """Shared by the command line and the prompt. Returns a summary line."""
     when = date.today()
     rest = []
     i = 0
     while i < len(args):
         a = args[i]
-        if a in ("-d", "--date"):
+        if a in ("-d", "--date", "on"):
             when = parse_date(args[i + 1])
             i += 2
             continue
         rest.append(a)
         i += 1
     if len(rest) < 2:
-        sys.exit("usage: rev <duration> <subject> [note] [-d <date>]")
+        raise ValueError("say how long and what — e.g. 90 chemistry past paper")
     minutes = parse_duration(rest[0])
-    subject = rest[1]
+    rows = read_rows()
+    subject = match_subject(rest[1], rows)
     note = " ".join(rest[2:])
 
-    rows = read_rows()
     rows.append({
         "date": when.isoformat(),
         "minutes": str(minutes),
@@ -198,10 +243,14 @@ def cmd_add(args):
     })
     write_rows(rows)
     build()
-    today_total = daily_totals(rows)[when.isoformat()]
-    print(f"logged {fmt(minutes)} of {subject}"
-          + (f" ({note})" if note else "")
-          + f" on {when:%a %d %b} — {fmt(today_total)} that day")
+    day_total = daily_totals(rows)[when.isoformat()]
+    return (f"logged {fmt(minutes)} of {subject}"
+            + (f" — {note}" if note else "")
+            + f" on {when:%a %d %b}; {fmt(day_total)} that day")
+
+
+def cmd_add(args):
+    print(add_entry(args))
 
 
 def cmd_list(args):
@@ -247,6 +296,36 @@ def cmd_push(args):
         subprocess.run(["git", "push"], cwd=ROOT, check=True)
 
 
+def cmd_dash(_=None):
+    """No arguments: show the dashboard, then sit on a prompt."""
+    sys.path.insert(0, os.path.join(ROOT, "tracker"))
+    import dash
+
+    while True:
+        rows = read_rows()
+        dash.show(build_payload(rows), daily_totals(rows))
+        if not os.isatty(0):
+            return
+        try:
+            line = input("  \x1b[2mlog it →\x1b[0m ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        if not line or line in ("q", "quit", "exit"):
+            build()
+            return
+        try:
+            if line in ("undo", "u"):
+                cmd_undo(None)
+            elif line in ("push", "sync"):
+                cmd_push([])
+            else:
+                print("  \x1b[32m✓\x1b[0m " + add_entry(shlex.split(line)))
+        except ValueError as e:
+            print(f"  \x1b[31m✗\x1b[0m {e}")
+        input("  \x1b[2m[enter]\x1b[0m")
+
+
 COMMANDS = {
     "list": cmd_list, "ls": cmd_list,
     "undo": cmd_undo,
@@ -257,7 +336,9 @@ COMMANDS = {
 
 
 def main(argv):
-    if not argv or argv[0] in ("-h", "--help", "help"):
+    if not argv:
+        return cmd_dash()
+    if argv[0] in ("-h", "--help", "help"):
         return print(__doc__.strip())
     handler = COMMANDS.get(argv[0])
     try:

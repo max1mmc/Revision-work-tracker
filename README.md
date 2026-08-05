@@ -4,27 +4,38 @@ Log a revision session in one line. The dashboard rebuilds itself every time.
 
 ![heatmap](https://img.shields.io/badge/dashboard-index.html-blue)
 
-## Log a session
+## Type `rev`
 
-```sh
-rev 90 Chemistry                  # 90 minutes of Chemistry, today
-rev 1h30 Maths "C4 past paper"    # hours + minutes, with a note
-rev 45m Physics waves             # 45 minutes
-rev -d yesterday 60 Biology       # backdated
-rev -d 2026-08-01 2h English      # any date (also 01/08, -3 for "3 days ago")
+That's the whole thing. You get the dashboard in the terminal — heatmap, streak,
+last 30 days, subject bars — and a prompt underneath:
+
+```
+  REVISION TRACKER  ·  Wed 05 Aug 2026
+
+    3h15 this week   ▲ 40m vs last   4d streak (best 15d)   408h all time
+
+  log it → 90 chemistry past paper
 ```
 
-Log as many sessions a day as you like — they add up into that day's total.
+Type how long and what you did, hit enter, and the dashboard redraws with it in.
+Blank line quits. `undo` and `push` work at the prompt too.
 
-## Everything else
+Durations: `90`, `45m`, `1h30`, `2h`. Subjects autocomplete from ones you've
+already used, so `chem` becomes `Chemistry` rather than a second subject.
+
+## Or skip the prompt
 
 ```sh
+rev 90 Chemistry                  # straight in, no dashboard
+rev 1h30 Maths "C4 past paper"
+rev -d yesterday 60 Biology       # backdated (also -d 01/08, -d -3)
 rev list          # last 10 entries (rev list 30 for more)
 rev undo          # remove the most recent entry
-rev stats         # totals and streak in the terminal
 rev build         # regenerate index.html
 rev push          # commit data.csv + index.html and push to GitHub
 ```
+
+Log as many sessions a day as you like — they add up into that day's total.
 
 ## The dashboard
 
@@ -38,9 +49,12 @@ internet, no dependencies.
   spread across the middle of the ramp instead of all sitting at the cold end.
 - **Trend** — daily minutes for the last 90 days with a 7-day rolling average
   line over the top, which is where a slide or a build-up actually shows.
+- **Subject mix, week by week** — 26 weeks of stacked bars. This is the one that
+  catches a subject you've quietly stopped touching.
+- **Which days you actually work** — average minutes per weekday.
 - **Subjects** — total time per subject, biggest first.
-- **Tiles** — total logged, last 7 days, current and best streak, days revised,
-  average active day.
+- **Tiles** — this week against last week, total, streak, average active day,
+  best day ever.
 
 ## Where the data lives
 

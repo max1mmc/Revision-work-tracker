@@ -79,6 +79,10 @@
   .bar .fill { height: 100%; border-radius: 4px; }
   .bar .num { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
   .empty { color: var(--muted); font-size: 14px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; font-size: 12px; color: var(--muted); }
+  .chips i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; }
+  .up { color: #2f9e5e; } .down { color: #d9483b; }
+  @media (prefers-color-scheme: dark) { .up { color: #57c785; } .down { color: #f2705f; } }
   footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 28px; }
 </style>
 </head>
@@ -115,6 +119,17 @@
   </div>
 
   <div class="panel">
+    <h2>Subject mix, week by week</h2>
+    <div id="mix"></div>
+    <div class="chips" id="chips"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Which days you actually work</h2>
+    <div id="weekday"></div>
+  </div>
+
+  <div class="panel">
     <h2>Where the time went</h2>
     <div class="bars" id="subjects"></div>
   </div>
@@ -125,7 +140,7 @@
 <div id="tip"></div>
 
 <script>
-const DATA = {"days":[],"subjects":[],"cap":180,"stats":{"totalMinutes":0,"sessions":0,"currentStreak":0,"longestStreak":0,"last7":0,"activeDays":0},"generated":"05 Aug 2026, 21:47"};
+const DATA = {"days":[],"subjects":[],"cap":180,"weeks":[],"weekday":[0,0,0,0,0,0,0],"stats":{"totalMinutes":0,"sessions":0,"currentStreak":0,"longestStreak":0,"last7":0,"activeDays":0,"thisWeek":0,"lastWeek":0,"bestDay":{"date":"","minutes":0},"bestWeek":0},"generated":"05 Aug 2026, 22:02"};
 
 /* Blue -> cyan -> green -> yellow -> orange -> red -> dark red.
    A long ramp on purpose: an average day should land mid-scale so
@@ -173,26 +188,34 @@ const today = new Date(); today.setHours(12, 0, 0, 0);
 const s = DATA.stats;
 document.getElementById("sub").textContent = s.sessions
   ? `${s.sessions} sessions logged · scale tops out at ${fmt(cap)} a day`
-  : "Nothing logged yet — run: rev 90 Chemistry";
+  : "Nothing logged yet — type rev in the terminal and log your first session";
+
+const delta = s.thisWeek - s.lastWeek;
+const vsLast = delta === 0 ? "level with last week"
+  : `<span class="${delta > 0 ? "up" : "down"}">${delta > 0 ? "▲" : "▼"} ${fmt(Math.abs(delta))}</span> vs last week`;
 
 const tiles = [
+  [fmt(s.thisWeek), vsLast],
   [fmt(s.totalMinutes), "total logged"],
-  [fmt(s.last7), "last 7 days"],
-  [`${s.currentStreak}d`, `current streak (best ${s.longestStreak}d)`],
-  [s.activeDays, "days revised"],
+  [`${s.currentStreak}d`, `current streak · best ${s.longestStreak}d`],
   [s.activeDays ? fmt(Math.round(s.totalMinutes / s.activeDays)) : "0m", "average active day"],
+  [fmt(s.bestDay.minutes), "best day ever"],
 ];
 document.getElementById("tiles").innerHTML = tiles
   .map(([v, k]) => `<div class="tile"><div class="v">${v}</div><div class="k">${k}</div></div>`).join("");
+
+/* one colour per subject, spread down the same ramp, biggest = hottest */
+const SUBJ = new Map(DATA.subjects.map((sub, i) =>
+  [sub.name, colour(1 - (DATA.subjects.length > 1 ? i / (DATA.subjects.length - 1) : 0) * 0.85)]));
 
 /* ---- heatmap ---- */
 let start;
 if (DATA.days.length) {
   start = new Date(DATA.days[0].date + "T12:00:00");
-  const year = new Date(today); year.setDate(year.getDate() - 364);
-  if (start > year) start = year;          // always show at least a year
+  const floor = new Date(today); floor.setDate(floor.getDate() - 181);
+  if (start > floor) start = floor;        // always show at least 26 weeks
 } else {
-  start = new Date(today); start.setDate(start.getDate() - 364);
+  start = new Date(today); start.setDate(start.getDate() - 181);
 }
 start.setDate(start.getDate() - ((start.getDay() + 6) % 7));   // back to Monday
 
@@ -305,20 +328,80 @@ weeksEl.addEventListener("mouseout", () => tip.style.opacity = 0);
   <div class="sub" style="margin-top:6px">Last ${days.length} days · line is the 7-day average</div>`;
 })();
 
+/* ---- weekly subject mix ---- */
+(function mix() {
+  const host = document.getElementById("mix");
+  const weeks = DATA.weeks;
+  if (!weeks.length) { host.innerHTML = '<div class="empty">No sessions yet.</div>'; return; }
+
+  const W = 940, H = 210, PAD = { l: 38, r: 8, t: 10, b: 22 };
+  const top = Math.max(120, Math.ceil(Math.max(...weeks.map(w => w.total)) / 60) * 60);
+  const step = (W - PAD.l - PAD.r) / weeks.length;
+  const bw = Math.max(3, step - 4);
+  const y = v => H - PAD.b - (v / top) * (H - PAD.t - PAD.b);
+
+  const grid = [0, 0.5, 1].map(f => `
+    <line x1="${PAD.l}" x2="${W - PAD.r}" y1="${y(top * f)}" y2="${y(top * f)}"
+          stroke="var(--line)"/>
+    <text x="${PAD.l - 6}" y="${y(top * f) + 3.5}" text-anchor="end" font-size="10"
+          fill="var(--muted)">${Math.round(top * f / 60)}h</text>`).join("");
+
+  const cols = weeks.map((w, i) => {
+    let acc = 0;
+    const segs = DATA.subjects.filter(sub => w.bySubject[sub.name]).map(sub => {
+      const v = w.bySubject[sub.name];
+      const rect = `<rect x="${PAD.l + i * step}" y="${y(acc + v)}" width="${bw}"
+        height="${Math.max(1, y(acc) - y(acc + v))}" fill="${SUBJ.get(sub.name)}"
+        ><title>${sub.name}: ${fmt(v)}</title></rect>`;
+      acc += v;
+      return rect;
+    }).join("");
+    return segs;
+  }).join("");
+
+  const ticks = weeks.map((w, i) => {
+    const d = new Date(w.start + "T12:00:00");
+    return (d.getDate() <= 7)
+      ? `<text x="${PAD.l + i * step}" y="${H - 6}" font-size="10"
+              fill="var(--muted)">${MONTHS[d.getMonth()]}</text>` : "";
+  }).join("");
+
+  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img"
+    aria-label="Weekly totals split by subject">${grid}${cols}${ticks}</svg>
+    <div class="sub" style="margin-top:6px">Last ${weeks.length} weeks · each bar is one week, split by subject</div>`;
+
+  document.getElementById("chips").innerHTML = DATA.subjects
+    .map(sub => `<span><i style="background:${SUBJ.get(sub.name)}"></i>${sub.name}</span>`).join("");
+})();
+
+/* ---- weekday pattern ---- */
+(function weekday() {
+  const host = document.getElementById("weekday");
+  const vals = DATA.weekday;
+  if (!vals.some(v => v)) { host.innerHTML = '<div class="empty">No sessions yet.</div>'; return; }
+  const names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const max = Math.max(...vals);
+  host.innerHTML = `<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:10px;align-items:end;height:130px">`
+    + vals.map((v, i) => `<div style="text-align:center">
+        <div class="sub" style="font-size:11px;margin-bottom:4px">${fmt(v)}</div>
+        <div style="height:${Math.max(3, (v / max) * 84)}px;border-radius:4px;
+             background:${colour(ease(v, cap))}"></div>
+        <div class="sub" style="font-size:11px;margin-top:6px">${names[i]}</div>
+      </div>`).join("")
+    + `</div><div class="sub" style="margin-top:10px">Average minutes per weekday, counting every day since you started</div>`;
+})();
+
 /* ---- subjects ---- */
 (function subjects() {
   const host = document.getElementById("subjects");
   if (!DATA.subjects.length) { host.innerHTML = '<div class="empty">No subjects yet.</div>'; return; }
   const max = DATA.subjects[0].minutes;
-  host.innerHTML = DATA.subjects.map((sub, i) => {
-    const share = DATA.subjects.length > 1 ? i / (DATA.subjects.length - 1) : 0;
-    return `<div class="bar">
+  host.innerHTML = DATA.subjects.map(sub => `<div class="bar">
       <div>${sub.name}</div>
       <div class="track"><div class="fill" style="width:${(sub.minutes / max) * 100}%;
-        background:${colour(1 - share * 0.85)}"></div></div>
+        background:${SUBJ.get(sub.name)}"></div></div>
       <div class="num">${fmt(sub.minutes)}</div>
-    </div>`;
-  }).join("");
+    </div>`).join("");
 })();
 
 document.getElementById("foot").textContent = "Updated " + DATA.generated;
