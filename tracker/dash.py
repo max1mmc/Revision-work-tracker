@@ -4,19 +4,12 @@ import os
 import shutil
 from datetime import date, datetime, timedelta
 
-# Blue -> cyan -> green -> yellow -> orange -> red -> dark red.
-STOPS = [
-    (0.00, (40, 90, 180)),
-    (0.14, (0, 150, 205)),
-    (0.28, (0, 190, 175)),
-    (0.42, (110, 205, 110)),
-    (0.56, (225, 225, 80)),
-    (0.68, (248, 190, 55)),
-    (0.79, (242, 140, 40)),
-    (0.89, (228, 70, 40)),
-    (0.96, (186, 25, 30)),
-    (1.00, (116, 10, 22)),
-]
+# Turbo (Mikhailov/Google), the polynomial approximation of the real thing:
+# deep blue -> cyan -> green -> yellow -> orange -> red, then run into dark red.
+_R = (0.13572138, 4.61539260, -42.66032258, 132.13108234, -152.94239396, 59.28637943)
+_G = (0.09140261, 2.19418839, 4.84296658, -14.18503333, 4.27729857, 2.82956604)
+_B = (0.10667330, 12.64194608, -60.58204836, 110.36276771, -89.90310912, 27.34824973)
+DEEP = (108, 4, 22)      # the top of the scale, darker than turbo ends on its own
 EMPTY = (44, 49, 60)
 SPARKS = "▁▂▃▄▅▆▇█"
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -29,13 +22,14 @@ BOLD = "\x1b[1m"
 
 def colour(t):
     t = max(0.0, min(1.0, t))
-    for i in range(1, len(STOPS)):
-        p1, c1 = STOPS[i]
-        if t <= p1:
-            p0, c0 = STOPS[i - 1]
-            k = (t - p0) / (p1 - p0)
-            return tuple(round(a + (b - a) * k) for a, b in zip(c0, c1))
-    return STOPS[-1][1]
+    x = 0.07 + t * 0.89          # skip turbo's near-black start, keep a blue floor
+    p = (1, x, x ** 2, x ** 3, x ** 4, x ** 5)
+    rgb = [max(0, min(255, round(255 * sum(a * b for a, b in zip(k, p)))))
+           for k in (_R, _G, _B)]
+    if t > 0.88:                 # ease the hot end into a deep red
+        k = ((t - 0.88) / 0.12) * 0.8
+        rgb = [round(c + (d - c) * k) for c, d in zip(rgb, DEEP)]
+    return tuple(rgb)
 
 
 def fg(rgb):

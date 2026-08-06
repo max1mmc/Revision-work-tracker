@@ -1,2 +1,7 @@
 .DS_Store
 __pycache__/
+
+# your log never belongs in here
+data.csv
+index.html
+dashboard.html

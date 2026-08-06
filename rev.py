@@ -7,8 +7,10 @@
     rev -d 2026-08-01 45 Physics     # backdated
     rev list                         # recent entries
     rev undo                         # remove the last entry
-    rev build                        # just regenerate index.html
-    rev push                         # commit + push to GitHub
+    rev open                         # open the full dashboard in a browser
+    rev where                        # where your log is kept
+
+Your log lives in ~/.revision, not in this repo — set REV_HOME to move it.
 """
 
 import csv
@@ -22,10 +24,24 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-DATA = os.path.join(ROOT, "data.csv")
 TEMPLATE = os.path.join(ROOT, "tracker", "template.html")
-OUTPUT = os.path.join(ROOT, "index.html")
 FIELDS = ["date", "minutes", "subject", "notes"]
+
+# Your log lives outside the repo. The repo is the program; the data is yours,
+# it stays on your machine, and cloning this gets you an empty tracker of your
+# own. Point REV_HOME somewhere else (a private repo, a synced folder) to move it.
+HOME = os.path.abspath(os.environ.get("REV_HOME")
+                       or os.path.expanduser("~/.revision"))
+DATA = os.path.join(HOME, "data.csv")
+OUTPUT = os.path.join(HOME, "dashboard.html")
+
+
+def ensure_home():
+    os.makedirs(HOME, exist_ok=True)
+    stale = os.path.join(ROOT, "data.csv")      # from before the data moved out
+    if os.path.exists(stale) and not os.path.exists(DATA):
+        os.replace(stale, DATA)
+        print(f"moved your log out of the repo into {DATA}")
 
 
 # ---------------------------------------------------------------- parsing
@@ -72,6 +88,7 @@ def read_rows():
 
 
 def write_rows(rows):
+    ensure_home()
     rows.sort(key=lambda r: (r["date"], r["subject"].lower()))
     with open(DATA, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=FIELDS)
@@ -186,6 +203,7 @@ def build_payload(rows):
 
 
 def build():
+    ensure_home()
     rows = read_rows()
     with open(TEMPLATE, encoding="utf-8") as f:
         html = f.read()
@@ -284,16 +302,33 @@ def cmd_stats(_):
 
 
 def cmd_build(_):
-    print(f"rebuilt index.html from {build()} entries")
+    n = build()
+    print(f"rebuilt {OUTPUT} from {n} entries")
 
 
-def cmd_push(args):
+def cmd_where(_):
+    print(f"log        {DATA}")
+    print(f"dashboard  {OUTPUT}")
+    print(f"program    {ROOT}")
+    print(f"\nSet REV_HOME to keep the log somewhere else "
+          f"(a private repo, iCloud, Dropbox).")
+
+
+def cmd_open(_):
     build()
-    msg = " ".join(args) or f"Update tracker — {date.today():%d %b %Y}"
-    subprocess.run(["git", "add", "data.csv", "index.html"], cwd=ROOT, check=True)
-    r = subprocess.run(["git", "commit", "-m", msg], cwd=ROOT)
-    if r.returncode == 0:
-        subprocess.run(["git", "push"], cwd=ROOT, check=True)
+    subprocess.run(["open", OUTPUT])
+
+
+def cmd_save(args):
+    """Commit the log wherever it lives — only useful if REV_HOME is a repo."""
+    build()
+    if not os.path.isdir(os.path.join(HOME, ".git")):
+        sys.exit(f"{HOME} isn't a git repo — nothing to save to.\n"
+                 f"Point REV_HOME at a private repo if you want your log backed up.")
+    msg = " ".join(args) or f"Revision log — {date.today():%d %b %Y}"
+    subprocess.run(["git", "add", "-A"], cwd=HOME, check=True)
+    if subprocess.run(["git", "commit", "-m", msg], cwd=HOME).returncode == 0:
+        subprocess.run(["git", "push"], cwd=HOME)
 
 
 def cmd_dash(_=None):
@@ -317,8 +352,8 @@ def cmd_dash(_=None):
         try:
             if line in ("undo", "u"):
                 cmd_undo(None)
-            elif line in ("push", "sync"):
-                cmd_push([])
+            elif line in ("open", "o"):
+                cmd_open(None)
             else:
                 print("  \x1b[32m✓\x1b[0m " + add_entry(shlex.split(line)))
         except ValueError as e:
@@ -331,7 +366,9 @@ COMMANDS = {
     "undo": cmd_undo,
     "stats": cmd_stats,
     "build": cmd_build,
-    "push": cmd_push, "sync": cmd_push,
+    "open": cmd_open,
+    "where": cmd_where,
+    "save": cmd_save,
 }
 
 
